@@ -1,5 +1,5 @@
 /**
- * ui.js — Expressive Chords
+ * ui.js — Chord Floww
  *
  * Thin UI over dsp.so. DSP handles all chord logic, preset storage,
  * pad slots, strum, articulation. UI handles display + input only.

@@ -1,8 +1,8 @@
 {
     "api_version": 1,
-    "id": "expressive-chords",
-    "name": "Expressive Chords",
-    "abbrev": "EX",
+    "id": "chord-flow",
+    "name": "Chord Flow",
+    "abbrev": "CF",
     "version": "0.5.0",
     "author": "Magnus Liljebergh",
     "builtin": false,
@@ -16,7 +16,7 @@
         "ui_hierarchy": {
             "levels": {
                 "root": {
-                    "name": "Expressive Chords",
+                    "name": "Chord Flow",
                     "list_param": "preset",
                     "count_param": "preset_count",
                     "name_param": "pad_label",

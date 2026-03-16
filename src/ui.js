@@ -9,7 +9,7 @@
  *   'edit'     — per-pad chord settings editor
  */
 
-import { shouldFilterMessage } from '../../shared/input_filter.mjs';
+import { shouldFilterMessage, decodeDelta } from '../../shared/input_filter.mjs';
 
 // ─── CC constants ─────────────────────────────────────────────────────────────
 const CC_JOG   = 14;
@@ -20,6 +20,10 @@ const CC_UP    = 46;
 const CC_DOWN  = 47;
 const CC_LEFT  = 62;
 const CC_RIGHT = 63;
+const PAD_NOTE_MIN = 36;
+const PAD_NOTE_MAX = 67;
+const PAD_NOTE_FALLBACK_MIN = 68;
+const PAD_NOTE_FALLBACK_MAX = 99;
 
 // ─── Display ──────────────────────────────────────────────────────────────────
 const SCREEN_W = 128;
@@ -32,11 +36,11 @@ const ROW_H    = 9;
 const VISIBLE  = Math.floor((LIST_BOT - LIST_TOP) / ROW_H); // 4
 
 // ─── Edit rows ────────────────────────────────────────────────────────────────
-const EDIT_KEYS   = ['pad','root','type','inversion','strum','strum_dir','articulation','reverse_art'];
-const EDIT_LABELS = ['Pad','Root','Chord Type','Inversion','Strum','Strum Dir','Articulation','Reverse Art'];
+const EDIT_KEYS   = ['pad','pad_octave','root','chord_type','inversion','strum','strum_dir','articulation','reverse_art','global_octave','global_transpose','save'];
+const EDIT_LABELS = ['Pad','Pad Oct','Root','Chord Type','Inversion','Strum','Strum Dir','Articulation','Reverse Art','Global Oct','Global Trans','Save'];
 const EDIT_ENUMS  = {
     root:         ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'],
-    type:         ['maj','min','dom7','maj7','min7','sus2','sus4','add9','min9','maj9','dim','aug','5th','6th','min6','dom9'],
+    chord_type:   ['maj','min','dom7','maj7','min7','sus2','sus4','add9','min9','maj9','dim','aug','5th','6th','min6','dom9'],
     inversion:    ['root','1st','2nd','3rd'],
     strum_dir:    ['up','down'],
     articulation: ['off','on'],
@@ -56,10 +60,21 @@ let presetName  = '';
 // Edit
 let editRow  = 0;
 let editVals = {};
+let saveStatus = '---';
+let saveFlashTicks = 0;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function trunc(s, n) { return s.length > n ? s.substring(0, n - 1) + '~' : s; }
+function formatEditValue(key, raw) {
+    if (key === 'root') return raw.toUpperCase();
+    return raw;
+}
+function noteToPad(note) {
+    if (note >= PAD_NOTE_MIN && note <= PAD_NOTE_MAX) return note - PAD_NOTE_MIN + 1;
+    if (note >= PAD_NOTE_FALLBACK_MIN && note <= PAD_NOTE_FALLBACK_MAX) return note - PAD_NOTE_FALLBACK_MIN + 1;
+    return 0;
+}
 
 // ─── DSP communication ────────────────────────────────────────────────────────
 function dspGet(key) {
@@ -89,8 +104,10 @@ function readEditVals(knownPad) {
     // Read all pad params from DSP — DSP returns values for current active pad
     editVals = {};
     for (const k of EDIT_KEYS) {
+        if (k === 'save') continue;
         editVals[k] = dspGet(k);
     }
+    editVals.save = saveStatus;
     // If caller knows the pad number for certain, use it directly
     // (guards against DSP not yet reflecting the switch)
     if (knownPad !== undefined) {
@@ -98,9 +115,25 @@ function readEditVals(knownPad) {
     }
 }
 
+function triggerSave() {
+    saveStatus = 'saving';
+    editVals.save = saveStatus;
+    dspSet('save', 'save');
+    refreshPreset();
+    saveStatus = 'saved';
+    saveFlashTicks = 40;
+    editVals.save = saveStatus;
+    needsRedraw = true;
+}
+
 function cycleVal(delta) {
     const key = EDIT_KEYS[editRow];
     if (!key) return;
+    if (key === 'save') {
+        if (delta > 0) triggerSave();
+        return;
+    }
+
     const cur = editVals[key] || '';
 
     if (EDIT_ENUMS[key]) {
@@ -114,9 +147,11 @@ function cycleVal(delta) {
         dspSet(key, opts[i]);
         editVals[key] = opts[i];
     } else {
-        const n = clamp((parseInt(cur) || 0) + delta,
-                        key === 'pad' ? 1 : 0,
-                        key === 'pad' ? 32 : 100);
+        const isOctave = key === 'global_octave' || key === 'pad_octave';
+        const isTranspose = key === 'global_transpose';
+        const minVal = key === 'pad' ? 1 : (isOctave ? -6 : (isTranspose ? -12 : 0));
+        const maxVal = key === 'pad' ? 32 : (isOctave ? 6 : (isTranspose ? 12 : 100));
+        const n = clamp((parseInt(cur) || 0) + delta, minVal, maxVal);
         dspSet(key, n);
         editVals[key] = String(n);
         // Pad change: re-read all values from DSP for the new pad.
@@ -172,8 +207,9 @@ function drawEditScreen() {
         if (idx >= EDIT_KEYS.length) break;
         const y    = LIST_TOP + i * ROW_H;
         const sel  = (idx === editRow);
+        const key  = EDIT_KEYS[idx];
         const lbl  = EDIT_LABELS[idx];
-        const val  = String(editVals[EDIT_KEYS[idx]] || '?');
+        const val  = formatEditValue(key, String(editVals[key] || '?'));
         const valX = SCREEN_W - val.length * 6 - 3;
 
         if (sel) {
@@ -220,10 +256,14 @@ function handleClick() {
     if (screen === 'browser') {
         // Load this preset into the current active pad, then open edit
         dspSet('preset', presetIndex);
+        saveStatus  = '---';
+        saveFlashTicks = 0;
         readEditVals();
         editRow     = 0;
         screen      = 'edit';
         needsRedraw = true;
+    } else if (screen === 'edit' && EDIT_KEYS[editRow] === 'save') {
+        triggerSave();
     }
 }
 
@@ -255,13 +295,21 @@ globalThis.init = function() {
 
 globalThis.tick = function() {
     // Poll DSP's current_pad while in edit mode. This catches pad switches that
-    // come through process_midi (note-on 68-99) regardless of whether
+    // come through process_midi pad note handling regardless of whether
     // onMidiMessageInternal also fires for them.
     if (screen === 'edit') {
         const dspPad = dspGet('pad');
         if (dspPad && dspPad !== editVals['pad']) {
             readEditVals(parseInt(dspPad));
             needsRedraw = true;
+        }
+        if (saveFlashTicks > 0) {
+            saveFlashTicks -= 1;
+            if (saveFlashTicks === 0 && saveStatus !== '---') {
+                saveStatus = '---';
+                editVals.save = saveStatus;
+                needsRedraw = true;
+            }
         }
     }
     if (needsRedraw) redraw();
@@ -278,11 +326,16 @@ globalThis.onMidiMessageInternal = function(data) {
     if (status === 0xB0 && d1 === CC_DOWN  && d2 > 0)  { handleUpDown(1);               return; }
     if (status === 0xB0 && d1 === CC_LEFT  && d2 > 0)  { handleJogTurn(-1);             return; }
     if (status === 0xB0 && d1 === CC_RIGHT && d2 > 0)  { handleJogTurn(1);              return; }
-    if (status === 0xB0 && d1 === CC_JOG)              { handleJogTurn((d2 <= 64) ? d2 : d2 - 128); return; }
+    if (status === 0xB0 && d1 === CC_JOG)              {
+        const delta = decodeDelta(d2);
+        if (delta !== 0) handleJogTurn(delta);
+        return;
+    }
 
     // Pad press — tell DSP to switch active pad, refresh edit if open
-    if ((status & 0xF0) === 0x90 && d2 > 0 && d1 >= 68 && d1 <= 99) {
-        const padNum = d1 - 68 + 1;
+    if ((status & 0xF0) === 0x90 && d2 > 0) {
+        const padNum = noteToPad(d1);
+        if (padNum <= 0) return;
         dspSet('pad', padNum);        // synchronously update DSP's current_pad
         if (screen === 'edit') {
             readEditVals(padNum);      // pass padNum so header is always correct
@@ -295,8 +348,9 @@ globalThis.onMidiMessageInternal = function(data) {
 globalThis.onMidiMessageExternal = function(data) {
     if (shouldFilterMessage(data)) return;
     const status = data[0], d1 = data[1], d2 = data[2];
-    if ((status & 0xF0) === 0x90 && d2 > 0 && d1 >= 68 && d1 <= 99) {
-        const padNum = d1 - 68 + 1;
+    if ((status & 0xF0) === 0x90 && d2 > 0) {
+        const padNum = noteToPad(d1);
+        if (padNum <= 0) return;
         dspSet('pad', padNum);
         if (screen === 'edit') { readEditVals(padNum); needsRedraw = true; }
     }

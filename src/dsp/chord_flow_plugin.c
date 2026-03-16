@@ -6,7 +6,8 @@
  * Architecture:
  *   - 32 pad slots per preset, each with independent chord settings
  *   - Loading a preset copies all 32 pad configs into active_pad_slots[]
- *   - Pressing a pad (note 68-99) switches current_pad and plays that pad's chord
+ *   - Pressing a pad note (36-67, fallback 68-99) switches current_pad
+ *     and plays that pad's chord
  *   - "save" param writes active_pad_slots[] as a new/overwritten preset
  *
  * Params (string key / string value):
@@ -14,8 +15,11 @@
  *   preset_count  int      (read-only)
  *   preset_name   string   (read-only) name of current preset
  *   current_pad   int      1-32 active pad for editing
+ *   global_octave int      -6..6 octave transpose for all pads in active preset
+ *   global_transpose int    -12..12 semitone transpose for all pads in active preset
+ *   pad_octave    int      -6..6 octave transpose for current pad
  *   root          enum     c/c#/d/d#/e/f/f#/g/g#/a/a#/b
- *   type          enum     maj/min/dom7/maj7/min7/sus2/sus4/add9/min9/maj9/dim/aug/5th/6th/min6/dom9
+ *   chord_type    enum     maj/min/dom7/maj7/min7/sus2/sus4/add9/min9/maj9/dim/aug/5th/6th/min6/dom9
  *   inversion     enum     root/1st/2nd/3rd
  *   strum         int      0-100 (ms between notes)
  *   strum_dir     enum     up/down
@@ -42,6 +46,12 @@
 #define PAD_COUNT             32
 #define MAX_PENDING           64
 #define USER_PRESETS_PATH     "/data/UserData/move-anything/expressive-chords/presets.json"
+#define OCT_MIN               -6
+#define OCT_MAX               6
+#define GLOBAL_OCT_DEFAULT    2
+#define TRANSPOSE_MIN         -12
+#define TRANSPOSE_MAX         12
+#define GLOBAL_TRANSPOSE_DEFAULT 0
 
 /* ── Logging macro per CLAUDE.md standards ────────────────────────────────── */
 /* LOG: safe printf-style logging via host->log */
@@ -133,6 +143,7 @@ static const chord_def_t CHORD_DEFS[TYPE_COUNT] = {
 
 /* ── Data structures ─────────────────────────────────────────────────────── */
 typedef struct {
+    int octave;       /* -6..6 */
     int root;         /* 0-11 */
     int type;         /* 0-15 */
     int inversion;    /* 0-3  */
@@ -144,6 +155,8 @@ typedef struct {
 
 typedef struct {
     char      name[MAX_PRESET_NAME];
+    int       global_octave; /* -6..6 */
+    int       global_transpose; /* -12..12 */
     pad_slot_t slots[PAD_COUNT];
 } preset_t;
 
@@ -161,6 +174,8 @@ typedef struct {
     preset_t   presets[MAX_PRESETS];
     int        preset_count;
     int        active_preset;       /* index of loaded preset, -1 = none */
+    int        active_global_octave;/* -6..6 */
+    int        active_global_transpose;/* -12..12 */
     pad_slot_t active_pad_slots[PAD_COUNT];
     int        current_pad;         /* 1-based */
     int8_t     held_out[128][MAX_CHORD_NOTES];
@@ -187,6 +202,12 @@ static int parse_enum(const char **names, int count, const char *val) {
     if (v >= 0) return v;
     v = atoi(val);
     return (v >= 0 && v < count) ? v : 0;
+}
+
+static int note_to_pad(int note) {
+    if (note >= 36 && note <= 67) return note - 36 + 1;
+    if (note >= 68 && note <= 99) return note - 68 + 1;
+    return 0;
 }
 
 /* ── JSON mini-parser ────────────────────────────────────────────────────── */
@@ -253,6 +274,9 @@ static pad_slot_t parse_slot(const char *obj) {
     pad_slot_t s;
     char tmp[32];
 
+    /* octave: int */
+    s.octave = clamp_i(json_get_int(obj,"octave",0), OCT_MIN, OCT_MAX);
+
     /* root: try string first ("c","c#",...), fall back to int */
     if (json_get_str(obj, "root", tmp, sizeof(tmp))) {
         int v = find_enum(ROOT_NAMES, ROOT_COUNT, tmp);
@@ -261,12 +285,12 @@ static pad_slot_t parse_slot(const char *obj) {
         s.root = clamp_i(json_get_int(obj,"root",0), 0, ROOT_COUNT-1);
     }
 
-    /* type: try string first ("maj","min",...), fall back to int */
-    if (json_get_str(obj, "type", tmp, sizeof(tmp))) {
+    /* chord_type: try string first ("maj","min",...), fall back to int */
+    if (json_get_str(obj, "chord_type", tmp, sizeof(tmp))) {
         int v = find_enum(TYPE_NAMES, TYPE_COUNT, tmp);
         s.type = (v >= 0) ? v : clamp_i(atoi(tmp), 0, TYPE_COUNT-1);
     } else {
-        s.type = clamp_i(json_get_int(obj,"type",0), 0, TYPE_COUNT-1);
+        s.type = clamp_i(json_get_int(obj,"chord_type",0), 0, TYPE_COUNT-1);
     }
 
     /* inversion: int only */
@@ -332,9 +356,9 @@ static char *read_file(const char *path) {
     return buf;
 }
 
-/* Parse presets JSON — supports two formats:
- *   Old flat:  [{"name":"X", "root":0, "type":4, ...}, ...]
- *   New pads:  [{"name":"X", "pads":[{...},{...},...32...]}, ...]
+/* Parse presets JSON:
+ *   [{"name":"X", "global_octave":2, "global_transpose":0,
+ *     "pads":[{...},{...},...32...]}, ...]
  */
 static void load_presets_from_json(expchords_t *inst, const char *json) {
     const char *p = skip_ws(json);
@@ -364,6 +388,8 @@ static void load_presets_from_json(expchords_t *inst, const char *json) {
         preset_t *pr = &inst->presets[inst->preset_count];
         strncpy(pr->name, "preset", MAX_PRESET_NAME - 1);
         pr->name[MAX_PRESET_NAME - 1] = '\0';
+        pr->global_octave = clamp_i(json_get_int(obj, "global_octave", GLOBAL_OCT_DEFAULT), OCT_MIN, OCT_MAX);
+        pr->global_transpose = clamp_i(json_get_int(obj, "global_transpose", GLOBAL_TRANSPOSE_DEFAULT), TRANSPOSE_MIN, TRANSPOSE_MAX);
         json_get_str(obj, "name", pr->name, MAX_PRESET_NAME);
 
         /* Check for pads array */
@@ -399,10 +425,6 @@ static void load_presets_from_json(expchords_t *inst, const char *json) {
                 while (pad_idx < PAD_COUNT)
                     pr->slots[pad_idx++] = default_slot();
             }
-        } else {
-            /* Old flat format: one slot definition applies to all pads */
-            pad_slot_t s = parse_slot(obj);
-            for (int i = 0; i < PAD_COUNT; i++) pr->slots[i] = s;
         }
 
         free(obj);
@@ -429,6 +451,8 @@ static void load_presets(expchords_t *inst) {
         /* Hardcoded fallback */
         inst->preset_count = 1;
         strncpy(inst->presets[0].name, "Default", MAX_PRESET_NAME - 1);
+        inst->presets[0].global_octave = GLOBAL_OCT_DEFAULT;
+        inst->presets[0].global_transpose = GLOBAL_TRANSPOSE_DEFAULT;
         for (int i = 0; i < PAD_COUNT; i++)
             inst->presets[0].slots[i] = default_slot();
         LOG("using fallback preset");
@@ -459,13 +483,14 @@ static void save_presets(expchords_t *inst) {
     fprintf(f, "[\n");
     for (int i = 0; i < inst->preset_count; i++) {
         preset_t *pr = &inst->presets[i];
-        fprintf(f, "  {\"name\":\"%s\",\"pads\":[\n", pr->name);
+        fprintf(f, "  {\"name\":\"%s\",\"global_octave\":%d,\"global_transpose\":%d,\"pads\":[\n",
+                pr->name, pr->global_octave, pr->global_transpose);
         for (int j = 0; j < PAD_COUNT; j++) {
             pad_slot_t *s = &pr->slots[j];
-            fprintf(f, "    {\"root\":%d,\"type\":%d,\"inversion\":%d,"
+            fprintf(f, "    {\"octave\":%d,\"root\":%d,\"chord_type\":%d,\"inversion\":%d,"
                     "\"strum\":%d,\"strum_dir\":%d,"
                     "\"articulation\":%d,\"reverse_art\":%d}%s\n",
-                    s->root, s->type, s->inversion,
+                    s->octave, s->root, s->type, s->inversion,
                     s->strum, s->strum_dir, s->articulation, s->reverse_art,
                     j < PAD_COUNT-1 ? "," : "");
         }
@@ -482,6 +507,8 @@ static void load_preset_into_slots(expchords_t *inst, int idx) {
     if (idx < 0 || idx >= inst->preset_count) return;
     
     inst->active_preset = idx;
+    inst->active_global_octave = inst->presets[idx].global_octave;
+    inst->active_global_transpose = inst->presets[idx].global_transpose;
     for (int i = 0; i < PAD_COUNT; i++)
         inst->active_pad_slots[i] = inst->presets[idx].slots[i];
     
@@ -489,7 +516,7 @@ static void load_preset_into_slots(expchords_t *inst, int idx) {
 }
 
 /* ── Chord building ──────────────────────────────────────────────────────── */
-static int build_chord(pad_slot_t *s, int input_note,
+static int build_chord(pad_slot_t *s, int global_octave, int global_transpose, int input_note,
                        int out_notes[], int max_notes) {
     const chord_def_t *def = &CHORD_DEFS[s->type];
     int count = def->count < max_notes ? def->count : max_notes;
@@ -497,7 +524,7 @@ static int build_chord(pad_slot_t *s, int input_note,
     int i;
 
     for (i = 0; i < count; i++)
-        notes[i] = input_note + s->root + def->offs[i];
+        notes[i] = input_note + global_transpose + ((global_octave + s->octave) * 12) + s->root + def->offs[i];
 
     /* Inversion: raise bottom N notes by octave */
     int inv = s->inversion < count ? s->inversion : count - 1;
@@ -578,9 +605,12 @@ static int process_midi(void *instance,
     int is_off = (status == 0x80) || (status == 0x90 && vel == 0);
 
     /* Pad press: switch active pad */
-    if (is_on && note >= 68 && note <= 99) {
-        inst->current_pad = note - 68 + 1;
-        LOG("pad pressed: %d", inst->current_pad);
+    if (is_on) {
+        int pad = note_to_pad(note);
+        if (pad > 0) {
+            inst->current_pad = pad;
+            LOG("pad pressed: %d", inst->current_pad);
+        }
     }
 
     if (is_on) {
@@ -593,7 +623,7 @@ static int process_midi(void *instance,
         int pad_idx = inst->current_pad - 1;
         pad_slot_t *s = &inst->active_pad_slots[pad_idx];
         int chord_notes[MAX_CHORD_NOTES];
-        int count = build_chord(s, note, chord_notes, MAX_CHORD_NOTES);
+        int count = build_chord(s, inst->active_global_octave, inst->active_global_transpose, note, chord_notes, MAX_CHORD_NOTES);
 
         /* Strum timing */
         int strum_frames = 0;
@@ -733,16 +763,22 @@ static void set_param(void *instance, const char *key, const char *val) {
         }
         
         strncpy(inst->presets[target].name, name, MAX_PRESET_NAME-1);
+        inst->presets[target].global_octave = inst->active_global_octave;
+        inst->presets[target].global_transpose = inst->active_global_transpose;
         for (int i = 0; i < PAD_COUNT; i++)
             inst->presets[target].slots[i] = inst->active_pad_slots[i];
-            
+        
+        load_preset_into_slots(inst, target);
         save_presets(inst);
         return;
     }
 
     /* Per-pad params */
-    if (strcmp(key,"root")==0)          s->root         = parse_enum(ROOT_NAMES,ROOT_COUNT,val);
-    else if (strcmp(key,"type")==0)     s->type         = parse_enum(TYPE_NAMES,TYPE_COUNT,val);
+    if (strcmp(key,"global_octave")==0) inst->active_global_octave = clamp_i(atoi(val), OCT_MIN, OCT_MAX);
+    else if (strcmp(key,"global_transpose")==0) inst->active_global_transpose = clamp_i(atoi(val), TRANSPOSE_MIN, TRANSPOSE_MAX);
+    else if (strcmp(key,"pad_octave")==0) s->octave      = clamp_i(atoi(val), OCT_MIN, OCT_MAX);
+    else if (strcmp(key,"root")==0)     s->root         = parse_enum(ROOT_NAMES,ROOT_COUNT,val);
+    else if (strcmp(key,"chord_type")==0) s->type       = parse_enum(TYPE_NAMES,TYPE_COUNT,val);
     else if (strcmp(key,"inversion")==0)s->inversion    = parse_enum(INV_NAMES,INV_COUNT,val);
     else if (strcmp(key,"strum")==0)    s->strum        = clamp_i(atoi(val),0,100);
     else if (strcmp(key,"strum_dir")==0)s->strum_dir    = parse_enum(DIR_NAMES,DIR_COUNT,val);
@@ -780,9 +816,15 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     }
     if (strcmp(key,"pad")==0)
         return snprintf(buf,buf_len,"%d",inst->current_pad);
+    if (strcmp(key,"global_octave")==0)
+        return snprintf(buf,buf_len,"%d",inst->active_global_octave);
+    if (strcmp(key,"global_transpose")==0)
+        return snprintf(buf,buf_len,"%d",inst->active_global_transpose);
+    if (strcmp(key,"pad_octave")==0)
+        return snprintf(buf,buf_len,"%d",s->octave);
     if (strcmp(key,"root")==0)
         return snprintf(buf,buf_len,"%s",ROOT_NAMES[s->root]);
-    if (strcmp(key,"type")==0)
+    if (strcmp(key,"chord_type")==0)
         return snprintf(buf,buf_len,"%s",TYPE_NAMES[s->type]);
     if (strcmp(key,"inversion")==0)
         return snprintf(buf,buf_len,"%s",INV_NAMES[s->inversion]);
@@ -812,11 +854,12 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     }
     if (strcmp(key,"state")==0)
         return snprintf(buf,buf_len,
-            "{\"current_pad\":%d,\"root\":\"%s\",\"type\":\"%s\","
+            "{\"current_pad\":%d,\"global_octave\":%d,\"global_transpose\":%d,\"pad_octave\":%d,"
+            "\"root\":\"%s\",\"chord_type\":\"%s\","
             "\"inversion\":\"%s\",\"strum\":%d,"
             "\"strum_dir\":\"%s\",\"articulation\":\"%s\","
             "\"reverse_art\":\"%s\"}",
-            inst->current_pad,
+            inst->current_pad, inst->active_global_octave, inst->active_global_transpose, s->octave,
             ROOT_NAMES[s->root], TYPE_NAMES[s->type],
             INV_NAMES[s->inversion], s->strum,
             DIR_NAMES[s->strum_dir], ART_NAMES[s->articulation],

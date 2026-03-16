@@ -1,0 +1,26 @@
+{
+  "title": "Chord Flow",
+  "summary": "32-pad chord collection browser and editor for Move Everything.",
+  "sections": [
+    {
+      "title": "Browser",
+      "items": [
+        "Jog: browse presets",
+        "Click: load preset and enter edit",
+        "Back: return to module menu"
+      ]
+    },
+    {
+      "title": "Edit",
+      "items": [
+        "Pad presses select the active pad",
+        "Global Oct (default +2) sets preset-wide octave transpose",
+        "Global Trn sets preset-wide semitone transpose",
+        "Pad Oct sets per-pad octave transpose",
+        "Up/Down select row",
+        "Jog changes value",
+        "Save row + Jog Right (or Click) writes a new preset"
+      ]
+    }
+  ]
+}

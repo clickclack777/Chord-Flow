@@ -1,4 +1,4 @@
-Midi fx module for Move Everything by Charles Vestal, a hack that expands Ableton Moves capabilities with a mile. 
+Midi fx module for Move Everything by Charles Vestal, a hack that expands Ableton Moves capabilities with new midi fx, instruments, input sources, fxs and tools. 
 
 Play chord progressions with ease. 
 

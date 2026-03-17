@@ -45,7 +45,7 @@
 #define MAX_PRESET_NAME       48
 #define PAD_COUNT             32
 #define MAX_PENDING           64
-#define USER_PRESETS_PATH     "/data/UserData/move-anything/expressive-chords/presets.json"
+#define USER_PRESETS_PATH     "/data/UserData/move-anything/chord-/presets.json"
 #define OCT_MIN               -6
 #define OCT_MAX               6
 #define GLOBAL_OCT_DEFAULT    2
@@ -463,7 +463,7 @@ static void load_presets(expchords_t *inst) {
 
 /* ── Directory creation (POSIX instead of system()) ──────────────────────── */
 static void ensure_presets_dir(expchords_t *inst) {
-    int ret = mkdir("/data/UserData/move-anything/expressive-chords", 0755);
+    int ret = mkdir("/data/UserData/move-anything/chord-flow", 0755);
     if (ret != 0 && errno != EEXIST) {
         LOG("failed to create presets dir: %s", strerror(errno));
     } else {

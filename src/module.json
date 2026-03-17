@@ -4,7 +4,7 @@
     "name": "Chord Flow",
     "abbrev": "CF",
     "version": "0.6.1",
-    "author": "Magnus Liljebergh",
+    "author": "concept: Magnus Liljebergh, Development: Dom (handcraftedcc)",
     "builtin": false,
     "ui": "ui.js",
     "dsp": "dsp.so",

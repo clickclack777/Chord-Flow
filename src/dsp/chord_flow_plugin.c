@@ -342,6 +342,37 @@ static int same_bank(const char *a, const char *b) {
     return strncmp(a ? a : "", b ? b : "", MAX_BANK_NAME) == 0;
 }
 
+static int ci_strcmp(const char *a, const char *b) {
+    unsigned char ca, cb;
+    if (!a) a = "";
+    if (!b) b = "";
+    while (*a && *b) {
+        ca = (unsigned char)tolower((unsigned char)*a);
+        cb = (unsigned char)tolower((unsigned char)*b);
+        if (ca != cb) return (int)ca - (int)cb;
+        a++;
+        b++;
+    }
+    ca = (unsigned char)tolower((unsigned char)*a);
+    cb = (unsigned char)tolower((unsigned char)*b);
+    return (int)ca - (int)cb;
+}
+
+static int preset_sort_cmp(const void *lhs, const void *rhs) {
+    const preset_t *a = (const preset_t *)lhs;
+    const preset_t *b = (const preset_t *)rhs;
+    int c = ci_strcmp(a->bank, b->bank);
+    if (c != 0) return c;
+    c = ci_strcmp(a->name, b->name);
+    if (c != 0) return c;
+    return strcmp(a->name, b->name);
+}
+
+static void sort_presets_alpha(expchords_t *inst) {
+    if (!inst || inst->preset_count <= 1) return;
+    qsort(inst->presets, (size_t)inst->preset_count, sizeof(preset_t), preset_sort_cmp);
+}
+
 static int has_json_ext(const char *name) {
     size_t n;
     if (!name) return 0;
@@ -383,6 +414,15 @@ static int find_bank_index_by_name(expchords_t *inst, const char *name) {
     int i;
     for (i = 0; i < inst->bank_count; i++) {
         if (same_bank(inst->banks[i].name, name)) return i;
+    }
+    return -1;
+}
+
+static int find_preset_index_by_bank_and_name(expchords_t *inst, const char *bank, const char *name) {
+    int i;
+    for (i = 0; i < inst->preset_count; i++) {
+        if (same_bank(inst->presets[i].bank, bank) && strcmp(inst->presets[i].name, name) == 0)
+            return i;
     }
     return -1;
 }
@@ -759,6 +799,7 @@ static void load_presets(expchords_t *inst) {
             inst->presets[0].slots[i] = default_slot();
         LOG("using fallback preset");
     }
+    sort_presets_alpha(inst);
     rebuild_banks(inst);
     LOG("preset count: %d, bank count: %d", inst->preset_count, inst->bank_count);
 }
@@ -923,6 +964,19 @@ static int build_chord(pad_slot_t *s, int global_octave, int global_transpose, i
     return out;
 }
 
+static int note_held_by_other_input(expchords_t *inst, uint8_t owner_input_note, int midi_note) {
+    int in_note;
+    for (in_note = 0; in_note < 128; in_note++) {
+        int j;
+        if (in_note == owner_input_note) continue;
+        if (inst->held_out_count[in_note] <= 0) continue;
+        for (j = 0; j < inst->held_out_count[in_note] && j < MAX_CHORD_NOTES; j++) {
+            if ((int)inst->held_out[in_note][j] == midi_note) return 1;
+        }
+    }
+    return 0;
+}
+
 /* ── Plugin callbacks ────────────────────────────────────────────────────── */
 static void *create_instance(const char *module_dir, const char *config_json) {
     expchords_t *inst = calloc(1, sizeof(expchords_t));
@@ -1033,6 +1087,7 @@ static int process_midi(void *instance,
         for (i = 0; i < count && out < max_out; i++) {
             int n = (int)inst->held_out[note][i];
             if (n < 0 || n > 127) continue;
+            if (note_held_by_other_input(inst, note, n)) continue;
             out_msgs[out][0] = 0x80 | ch;
             out_msgs[out][1] = (uint8_t)n;
             out_msgs[out][2] = 0;
@@ -1159,8 +1214,10 @@ static void set_param(void *instance, const char *key, const char *val) {
         for (int i = 0; i < PAD_COUNT; i++)
             inst->presets[target].slots[i] = inst->active_pad_slots[i];
 
+        sort_presets_alpha(inst);
         rebuild_banks(inst);
-        load_preset_into_slots(inst, target);
+        target = find_preset_index_by_bank_and_name(inst, USER_BANK_NAME, name);
+        if (target >= 0) load_preset_into_slots(inst, target);
         save_presets(inst);
         return;
     }

@@ -44,9 +44,10 @@ int main(void) {
     char tmp_template[] = "/tmp/chordflow-multi-XXXXXX";
     char *tmp_dir;
     char presets_dir[1024];
-    char default_path[1024];
     char extra_path[1024];
+    char extra2_path[1024];
     char preset_name[128];
+    char bank_name[128];
 
     memset(&host, 0, sizeof(host));
     host.api_version = MOVE_PLUGIN_API_VERSION;
@@ -57,19 +58,18 @@ int main(void) {
     snprintf(presets_dir, sizeof(presets_dir), "%s/presets", tmp_dir);
     if (mkdir(presets_dir, 0755) != 0) fail("mkdir presets failed");
 
-    snprintf(default_path, sizeof(default_path), "%s/default.json", presets_dir);
-    write_text_file(
-        default_path,
-        "[{\"name\":\"Factory One\",\"global_octave\":2,\"global_transpose\":0,"
-        "\"pads\":[{\"octave\":0,\"root\":\"c\",\"bass\":\"none\",\"chord_type\":\"maj\",\"inversion\":0,"
-        "\"strum\":0,\"strum_dir\":0,\"articulation\":0,\"reverse_art\":0}]}]"
-    );
-
     snprintf(extra_path, sizeof(extra_path), "%s/more.json", presets_dir);
     write_text_file(
         extra_path,
-        "[{\"name\":\"Extra One\",\"global_octave\":2,\"global_transpose\":0,"
+        "[{\"name\":\"Zeta One\",\"bank\":\"Zeta Bank\",\"global_octave\":2,\"global_transpose\":0,"
         "\"pads\":[{\"octave\":0,\"root\":\"d\",\"bass\":\"none\",\"chord_type\":\"min\",\"inversion\":0,"
+        "\"strum\":0,\"strum_dir\":0,\"articulation\":0,\"reverse_art\":0}]}]"
+    );
+    snprintf(extra2_path, sizeof(extra2_path), "%s/aaa.json", presets_dir);
+    write_text_file(
+        extra2_path,
+        "[{\"name\":\"Alpha One\",\"bank\":\"Alpha Bank\",\"global_octave\":2,\"global_transpose\":0,"
+        "\"pads\":[{\"octave\":0,\"root\":\"e\",\"bass\":\"none\",\"chord_type\":\"min\",\"inversion\":0,"
         "\"strum\":0,\"strum_dir\":0,\"articulation\":0,\"reverse_art\":0}]}]"
     );
 
@@ -90,10 +90,24 @@ int main(void) {
         return 1;
     }
 
-    api->set_param(inst, "preset", "1");
+    api->set_param(inst, "preset", "0");
     get_str_param(api, inst, "preset_name", preset_name, sizeof(preset_name));
-    if (strcmp(preset_name, "Extra One") != 0) {
-        fprintf(stderr, "FAIL: expected preset_name Extra One, got %s\n", preset_name);
+    if (strcmp(preset_name, "Alpha One") != 0) {
+        fprintf(stderr, "FAIL: expected preset_name Alpha One, got %s\n", preset_name);
+        return 1;
+    }
+
+    api->set_param(inst, "bank", "0");
+    get_str_param(api, inst, "bank_name", bank_name, sizeof(bank_name));
+    if (strcmp(bank_name, "Alpha Bank") != 0) {
+        fprintf(stderr, "FAIL: expected bank_name Alpha Bank, got %s\n", bank_name);
+        return 1;
+    }
+
+    api->set_param(inst, "bank", "1");
+    get_str_param(api, inst, "bank_name", bank_name, sizeof(bank_name));
+    if (strcmp(bank_name, "Zeta Bank") != 0) {
+        fprintf(stderr, "FAIL: expected bank_name Zeta Bank, got %s\n", bank_name);
         return 1;
     }
 

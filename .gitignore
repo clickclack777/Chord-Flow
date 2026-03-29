@@ -1,6 +1,0 @@
-build/
-dist/
-.DS_Store
-presets/private/
-presets/user.json
-src/presets/roland.json

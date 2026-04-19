@@ -9,18 +9,20 @@ Chord Flow is a chainable MIDI FX module for Schwung that lets you trigger chord
 - Now with 256 presets
 - Scrolls long preset names in preset browser
 
-## Current behavior
+## Quick start
 
-- Starts in a preset browser with bank shown in the title bar (`CF: <bank>`).
-- Click (jog press) loads the selected preset and enters edit mode.
-- Jog in browser scrolls continuously across all banks.
-- Pad presses select the active pad and refresh the edit values.
-- `Global Oct` (default `+2`) transposes all pads in the current preset.
-- `Global Trans` adds semitone transpose (`-12..+12`) for the whole preset.
-- `Pad Oct` adds per-pad octave transpose on top of `Global Oct`.
-- `Bass` supports slash bass (`none` or note).
-- `Bank` parameter in edit view jumps directly to the first preset of a bank.
-- Save row writes a new preset snapshot to the `User` bank.
+1. First step, for any midi or sound generator module, is to make sure Native Move sends midi to Schwung by pressing Shift + track button for the track and set midi out channel. e.g. Track button 4 > Midi channel 4.
+
+2. Change that track layout to an empty/template drum track. It needs to be in drum pad mode to trigger the 16 midi chords in Chord Flow.
+
+3. Then shift + Vol + the track button that you just set the midi channel for in step 1. to enter Schwung signal chain view.
+
+4. Press the second slot aka “Synth” and select a synth you want to chord trigger.
+
+5. In Schwung signal chain view, press the first slot aka Midi FX and select Chord Flow.
+
+6. Choose a genre preset and tap one of 16 “drum” pads to trigger a custom chord. All pads can be customised and saved as a new preset.
+   
 
 ## Repository layout
 
